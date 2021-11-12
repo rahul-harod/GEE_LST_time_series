@@ -1,0 +1,133 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = /* color: #d63000 */ee.Geometry.Point([80.16722508021444, 13.034770109294364]),
+    expoROI = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[79.98289133477702, 13.310383680142765],
+          [79.98289133477702, 12.827467961516742],
+          [80.34818674493327, 12.827467961516742],
+          [80.34818674493327, 13.310383680142765]]], null, false),
+    aoi = ee.FeatureCollection("users/rharod4/Chennai_CMA");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+var LandsatLST = require('users/rharod4/Time_series:Landsat_LST.js');
+var Year_start=1982,
+    Year_end=2021,
+    Month_start=4,
+    Month_end=5 ;
+    
+// Map.centerObject(geometry,6);
+
+var LandsatColl = LandsatLST.collection( Month_start, Month_end ,geometry);
+// print(LandsatColl)
+var cmap1 = ['blue', 'cyan', 'green', 'yellow', 'red'];
+var cmap2 = ['pink','blue', 'cyan', 'green','gray', 'yellow','orange', 'red','purple']
+// var cmap2=['black','white']
+var LST_collection=LandsatColl.select(['LST']);
+
+var months = ee.List.sequence(4, 5);
+var years = ee.List.sequence(1984, 2020);
+// years=years.remove(2001) // for hyderabad
+years=years.removeAll(ee.List([1990,1993,2002,2010,2017,2018]));// for chennai
+
+// Map filtering and reducing across year-month combinations and convert to ImageCollection
+var Coll1 = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+        return months.map(function (m) {
+            return LST_collection
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .filter(ee.Filter.calendarRange(m, m, 'month'))
+              .sort('CLOUD_COVER').first()
+        });
+    }).flatten());
+var Coll2 = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+            return Coll1
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .sort('CLOUD_COVER').first()
+    }).flatten());
+Coll2=Coll2.map(function(a){
+                  return a.set('year',ee.Image(a).date().get('year'))
+                          .set('month',ee.Image(a).date().get('month'))
+                })
+print('final_collection: ',Coll2)
+print('year:',Coll2.aggregate_array('year'))
+// print('month:',Coll2.aggregate_array('month'))
+var Final_collection=ee.ImageCollection(Coll2.map(fill_gap))
+
+function fill_gap(image){
+        var filled1a = image.focal_mean(2, 'square', 'pixels',1)//(2,1)
+        return ee.Image((filled1a.blend(image)).copyProperties(image)).set('system:time_start', image.get('system:time_start'))
+}
+
+//Mean LST
+var lst_mean=Final_collection.mean().clip(aoi).rename('LST_mean');
+//Standard deviation
+var lst_std=Final_collection.reduce(ee.Reducer.stdDev()).rename('LST_std');
+
+//Deviation Collection (LST-Mean)
+var deviation=Final_collection.map(function(img){
+          var dev=img.subtract(lst_mean).rename('deviation')
+          return ee.Image(dev.copyProperties(img)).set('system:time_start', img.get('system:time_start'))
+})
+
+// Normalized deviation
+var Normalized_deviation=deviation.map(function(img){
+  var N_dev=img.divide(lst_std).rename('Normalized_deviation')
+  return  ee.Image(N_dev.copyProperties(img)).set('system:time_start', img.get('system:time_start'))
+})
+//Spatial Map
+
+var visArgs_Nstd = {
+  min:-3,
+  max:3,
+  palette:cmap2
+};
+
+
+var n = Normalized_deviation.size().getInfo();
+var colList = Normalized_deviation.toList(n);
+var img1=ee.Image(colList.get(n-1))//2020
+var img3=ee.Image(colList.get(0))//1988
+print(img3);
+var accessibilityRgb = ee.Image(img3).visualize(visArgs_Nstd);
+var empty = ee.Image().byte();
+var ROIOutline = empty
+  .paint({featureCollection: aoi, color: 1, width: 1})
+  // Convert to an RGB visualization image; set line color to black.
+  .visualize({palette: '000000'});
+// Composite onto a solid-color background to fill in the oceans.
+var background = ee.Image(0).visualize({palette: ['white']}).clip(expoROI);
+var accessibilityBlended = ee.Image(background.blend(accessibilityRgb).blend(ROIOutline).updateMask(1));
+print('accessibilityBlended',accessibilityBlended)
+// Check the visualization.
+Map.addLayer(accessibilityBlended);
+// var j=1988
+// var img2=Normalized_deviation.filterMetadata('year', 'equals', j)
+// print(img2)
+// Map.addLayer(img2,visArgs_Nstd,j.toString());
+        //
+Export.image.toDrive({
+        image: accessibilityBlended,
+        description:'N_STD1988_1',
+        region: expoROI,
+        fileFormat: 'GeoTIFF',
+        scale: 30,
+        maxPixels: 1e13})
+
+
+
+
+
+
+
+// Export.table.toDrive({
+//   collection: cma,
+//   description:'chennai_cma',
+//   fileFormat: 'shp'
+// });

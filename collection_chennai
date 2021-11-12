@@ -1,0 +1,516 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var geometry = 
+    /* color: #98ff00 */
+    /* shown: false */
+    ee.Geometry.Point([80.23314978734241, 13.076713001175321]),
+    geometry2 = 
+    /* color: #ffc82d */
+    /* shown: false */
+    ee.Geometry.Polygon(
+        [[[80.17145515713537, 13.117751023773819],
+          [80.18518806729162, 13.116413564187233],
+          [80.20441414151037, 13.127113037130833],
+          [80.20741821560705, 13.145835993419135],
+          [80.20990730557287, 13.16054588538672],
+          [80.19342781338537, 13.177929164697414],
+          [80.19291282925451, 13.154695465876785],
+          [80.1854452936452, 13.147340340857781],
+          [80.1760900143131, 13.13680903203694],
+          [80.15222908291662, 13.133799971136476]]]),
+    Point1 = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Point([80.26703527641973, 13.138537585103759]),
+    chennai_sample = ee.FeatureCollection("users/rharod4/Chennai_sample_points"),
+    NEW_points = 
+    /* color: #0434ff */
+    /* shown: false */
+    ee.Geometry.MultiPoint(
+        [[80.2994106348707, 13.128128981626132],
+         [80.26554744171597, 13.138935190102476],
+         [80.22315472704179, 12.9553093675617],
+         [80.27228746656085, 13.089459977443878],
+         [80.16605575252751, 13.070170333964766]]),
+    CWSCB = 
+    /* color: #062aff */
+    /* shown: false */
+    ee.Geometry.Point([80.198048, 13.105514]),
+    aoi = ee.FeatureCollection("users/rharod4/Chennai_CMA");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// var ROI=india_adm2.filterMetadata("NAME_2",'equals','Chennai')
+// var ROI=india_adm2.filterMetadata("NAME_2",'equals','Hyderabad')
+// provide geometry in geometry name variable
+
+var LandsatLST = require('users/rharod4/Time_series:Landsat_LST.js');
+var Year_start=1982,
+    Year_end=2021,
+    Month_start=4,
+    Month_end=5 ;
+    
+// Map.centerObject(geometry,6);
+
+var LandsatColl = LandsatLST.collection( Month_start, Month_end ,geometry);
+// print(LandsatColl)
+var cmap1 = ['blue', 'cyan', 'green', 'yellow', 'red'];
+var cmap2 = ['pink','blue', 'cyan', 'green','gray', 'yellow','orange', 'red','purple']
+// var cmap2=['black','white']
+var LST_collection=LandsatColl.select(['LST']);
+
+var months = ee.List.sequence(4, 5);
+var years = ee.List.sequence(1984, 2020);
+// years=years.remove(2001) // for hyderabad
+// years=years.removeAll(ee.List([1990,1993,2002,2010,2017,2018]));// for chennai
+
+// Map filtering and reducing across year-month combinations and convert to ImageCollection
+var Coll1 = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+        return months.map(function (m) {
+            return LST_collection
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .filter(ee.Filter.calendarRange(m, m, 'month'))
+              .sort('CLOUD_COVER').first()
+        });
+    }).flatten());
+var Coll2 = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+            return Coll1
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .sort('CLOUD_COVER').first()
+    }).flatten());
+Coll2=Coll2.map(function(a){
+                  return a.set('year',ee.Image(a).date().get('year'))
+                          .set('month',ee.Image(a).date().get('month'))
+                })
+// print('final_collection: ',Coll2)
+print('year:',Coll2.aggregate_array('year'))
+// print('month:',Coll2.aggregate_array('month'))
+var Final_collection=ee.ImageCollection(Coll2.map(fill_gap))
+
+function fill_gap(image){
+        var filled1a = image.focal_mean(2, 'square', 'pixels',1)//(2,1)
+        return ee.Image((filled1a.blend(image)).copyProperties(image)).set('system:time_start', image.get('system:time_start'))
+}
+
+//Mean LST
+var lst_mean=Final_collection.mean().clip(aoi).rename('LST_mean');
+//Standard deviation
+var lst_std=Final_collection.reduce(ee.Reducer.stdDev()).rename('LST_std');
+
+//Deviation Collection (LST-Mean)
+var deviation=Final_collection.map(function(img){
+          var dev=img.subtract(lst_mean).rename('deviation')
+          return ee.Image(dev.copyProperties(img)).set('system:time_start', img.get('system:time_start'))
+})
+
+// Normalized deviation
+var Normalized_deviation=deviation.map(function(img){
+  var N_dev=img.divide(lst_std).rename('Normalized_deviation')
+  return  ee.Image(N_dev.copyProperties(img)).set('system:time_start', img.get('system:time_start'))
+})
+
+
+//Spatial Map
+
+var visArgs_Nstd = {
+  min:-3,
+  max:3,
+  palette:cmap2
+};
+
+// var i=2020
+var n = Normalized_deviation.size().getInfo();
+var colList = Normalized_deviation.toList(n);
+var img1=ee.Image(colList.get(n-1))
+var img3=ee.Image(colList.get(0))
+// print(img1)
+// // Map.addLayer(img1,visArgs_Nstd,i.toString());
+// var accessibilityRgb = ee.Image(img1).visualize(visArgs_Nstd);
+
+// // Composite onto a solid-color background to fill in the oceans.
+// var background = ee.Image(0).visualize({palette: ['white']});
+// var accessibilityBlended = background.blend(accessibilityRgb).updateMask(1);
+
+// // Check the visualization.
+// Map.addLayer(accessibilityBlended, {}, 'accessibilityBlended');
+
+
+// var j=1988
+// var img2=Normalized_deviation.filterMetadata('year', 'equals', j)
+// print(img2)
+// Map.addLayer(img2,visArgs_Nstd,j.toString());
+
+// var k=2020
+// var img3=Normalized_deviation.filterMetadata('year', 'equals', k)
+// print(img3)
+// Map.addLayer(img3,visArgs_Nstd,k.toString());
+
+// var l=2020
+// var img4=Normalized_deviation.filterMetadata('year', 'equals', l)
+// print(img4)
+// Map.addLayer(img4,visArgs_Nstd,l.toString());
+
+var geometry=ee.Geometry.Point([80.27228746656085,13.089459977443878]);
+// var geometry=CWSCB
+ Map.centerObject(geometry,12);
+ Map.addLayer(geometry,{'color':'black'},'geometry')
+ 
+ 
+var stats_coll=img1.addBands(img3)
+print(stats_coll)
+var normalized_std_hist=stats_coll;
+var chart1 =
+    ui.Chart.image.histogram({image: normalized_std_hist, region: aoi, scale: 30})
+        .setSeriesNames(['1988','2020'])
+        .setOptions({
+          title: 'Normalized LST deviation',
+          hAxis: {
+            title: 'Normalized deviation',
+            titleTextStyle: {italic: false, bold: true},
+          },
+          vAxis:
+              {title: 'Pixel count', titleTextStyle: {italic: false, bold: true}},
+          colors: ['cf513e', '1d6b99']
+        });
+print(chart1);
+
+ 
+ 
+ 
+ 
+ 
+ 
+/*
+var n = Final_collection.size().getInfo();
+var colList = Final_collection.toList(n);
+var before5=ee.List([])
+var after5=ee.List([])
+for(var i=0;i<5;i++){
+    before5=before5.add(ee.Image(colList.get(i)))
+    after5=after5.add(ee.Image(colList.get(n-i-1)))
+}
+print('before5',before5)
+print('after5',after5)
+
+var visArgs_LST = {
+  min:290,
+  max:330,
+  palette:cmap2
+};
+before5=ee.ImageCollection(before5).mean().clip(aoi).rename('before_LST');
+after5=ee.ImageCollection(after5).mean().clip(aoi).rename('after_LST');
+Map.addLayer(before5,visArgs_LST,'before5');
+Map.addLayer(lst_mean.clip(aoi),visArgs_LST, 'mean');
+Map.addLayer(after5,visArgs_LST,'after5');
+
+
+//Normalized deviation
+var n = Normalized_deviation.size().getInfo();
+var colList = Normalized_deviation.toList(n);
+var Nstd_before=ee.List([])
+var Nstd_after=ee.List([])
+for(var i=0;i<5;i++){
+    Nstd_before=Nstd_before.add(ee.Image(colList.get(i)))
+    Nstd_after=Nstd_after.add(ee.Image(colList.get(n-i-1)))
+}
+
+var visArgs_Nstd = {
+  min:-3,
+  max:3,
+  palette:cmap2
+};
+
+Nstd_before=ee.ImageCollection(Nstd_before).mean().clip(aoi).rename('before_Nstd');
+Nstd_after=ee.ImageCollection(Nstd_after).mean().clip(aoi).rename('after_Nstd');
+Map.addLayer(Nstd_before,visArgs_Nstd,'Nstd_before');
+Map.addLayer(Nstd_after,visArgs_Nstd,'Nstd_after');
+
+*/
+// Map.centerObject(Chennai_B,12);
+// Map.addLayer(Chennai_B,{'color':'black'},'Chennai_B')
+
+// var stats_coll=before5.addBands(lst_mean).addBands(after5).addBands(Nstd_before).addBands(Nstd_after);
+// print(stats_coll);
+
+// var mean = stats_coll.reduceRegion({
+//   reducer: ee.Reducer.mean(),
+//   geometry: aoi,
+//   scale: 30,
+//   maxPixels: 1e13
+// });
+// var minimum= stats_coll.reduceRegion({
+//   reducer: ee.Reducer.min(),
+//   geometry: aoi,
+//   scale: 30,
+//   maxPixels: 1e13
+// });
+// var maximum= stats_coll.reduceRegion({
+//   reducer: ee.Reducer.max(),
+//   geometry: aoi,
+//   scale: 30,
+//   maxPixels: 1e13
+// });
+// print('min: ',minimum);
+// print('mean: ',mean);
+// print('max: ',maximum);
+
+
+// Create User Interface portion --------------------------------------------------
+// Create a panel to hold our widgets.
+var panel = ui.Panel();
+panel.style().set('width', '300px');
+
+// Create an intro panel with labels.
+var intro = ui.Panel([
+  ui.Label({
+    value: 'Time Series Chart Inspector',
+    style: {fontSize: '20px', fontWeight: 'bold'}
+  }),
+  ui.Label('Click a point on the map to inspect.')
+]);
+panel.add(intro);
+
+// panels to hold lon/lat values
+var lon = ui.Label();
+var lat = ui.Label();
+panel.add(ui.Panel([lon, lat], ui.Panel.Layout.flow('horizontal')));
+
+// Register a callback on the default map to be invoked when the map is clicked
+Map.onClick(function(coords) {
+  // Update the lon/lat panel with values from the click event.
+  lon.setValue('lon: ' + coords.lon.toFixed(5)),
+  lat.setValue('lat: ' + coords.lat.toFixed(5));
+  var point = ee.Geometry.Point(coords.lon, coords.lat);
+    // Create an MODIS NDSI chart.
+  var ndsiChart = ui.Chart.image.series(Normalized_deviation, point, ee.Reducer.mean(), 30);
+  ndsiChart.setOptions({
+    lineWidth: 1,
+    pointSize: 3,
+    title: 'Normalized LST deviation '+lon.getValue('lon')+' '+lat.getValue('lat'),
+    vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+    hAxis: {title: 'date', format: 'YYYY-MMM', gridlines: {count: 7}},
+  });
+  panel.widgets().set(2, ndsiChart);
+
+});
+
+Map.style().set('cursor', 'crosshair');
+
+// Add the panel to the ui.root.
+ui.root.insert(0, panel);
+
+
+/*
+var normalized_std_hist=stats_coll.select(['before_Nstd','after_Nstd']);
+var chart1 =
+    ui.Chart.image.histogram({image: normalized_std_hist, region: aoi, scale: 30})
+        .setSeriesNames(['Before','After'])
+        .setOptions({
+          title: 'Normalized deviation',
+          hAxis: {
+            title: 'Normalized deviation',
+            titleTextStyle: {italic: false, bold: true},
+          },
+          vAxis:
+              {title: 'Count', titleTextStyle: {italic: false, bold: true}},
+          colors: ['cf513e', '1d6b99']
+        });
+print(chart1);
+
+var LST_hist=stats_coll.select(['LST_mean','before_LST','after_LST']);
+var chart2 =
+    ui.Chart.image.histogram({image: LST_hist, region: aoi, scale: 30})
+        .setSeriesNames(['Mean','Before','After'])
+        .setOptions({
+          title: 'LST',
+          hAxis: {
+            title: 'LST',
+            titleTextStyle: {italic: false, bold: true},
+          },
+          vAxis:
+              {title: 'Count', titleTextStyle: {italic: false, bold: true}},
+          colors: ['cf513e', '1d6b99','f0af07']
+        });
+print(chart2);
+
+
+
+var visArgs = {
+  min:0,
+  max:10,
+  palette:cmap2
+};
+
+// Convert each image to an RGB visualization image by mapping the visualize
+// function over the image collection using the arguments defined previously.
+
+
+var tempColVis = (ee.ImageCollection(lst_std)).map(function(img) {
+// var tempColVis = Normalized_deviation.map(function(img) {
+  return img.visualize(visArgs);
+});
+// Define an empty image to paint features to.
+var empty = ee.Image().byte();
+
+// Paint country feature edges to the empty image.
+var ROIOutline = empty
+  .paint({featureCollection: ROI, color: 1, width: 1})
+  // Convert to an RGB visualization image; set line color to black.
+  .visualize({palette: '000000'});
+
+// Map a blend operation over the temperature collection to overlay the country
+// border outline image on all collection images.
+var tempColOutline = tempColVis.map(function(img) {
+  return img.blend(ROIOutline);
+});
+
+// Define animation arguments.
+var videoArgs = {
+  dimensions: 768,
+  region:Final_collection.geometry(),
+  framesPerSecond: 3,
+  crs: 'EPSG:3857'
+};
+
+
+// Print a URL that will produce the filmstrip when accessed.
+print("lst_std",tempColOutline.getFilmstripThumbURL(videoArgs));
+
+
+
+// Map.addLayer(deviation.min(),visArgs,'Normalized_deviation_min');
+// Map.addLayer(deviation.max(),visArgs,'Normalized_deviation_max');
+// Map.addLayer(lst_mean,{min:290, max:330, palette:cmap2}, 'mean');
+// Map.addLayer(lst_std,{min:0, max:10, palette:cmap2}, 'st_dev');
+
+// Map.addLayer(deviation.min(),visArgs,'deviation_min');
+// Map.addLayer(deviation.max(),visArgs,'deviation+max');
+Map.addLayer(ROI,{'color':'red'},'chennai')
+
+
+
+
+var n = Final_collection.size().getInfo();
+    
+var colList = Final_collection.toList(n);
+    
+var colID =Final_collection.getInfo()['id']
+for (var i = 0; i < n; i++) {
+  var img = ee.Image(colList.get(i));
+  var id = img.id().getInfo() || colID+'_image_'+i.toString();
+  var region = aoi
+
+      
+  Export.image.toDrive({
+        image: img,
+        description: id,
+        folder: "HYDERABAD/LST",
+        fileNamePrefix: id,
+        region: region,
+        fileFormat: 'GeoTIFF',
+        scale: 30,
+        maxPixels: 1e13})
+    }
+    
+    
+      
+Export.image.toDrive({
+        image: lst_mean,
+        description:'mean_LST',
+        folder: "HYDERABAD",
+        region: region,
+        fileFormat: 'GeoTIFF',
+        scale: 30,
+        maxPixels: 1e13})
+        
+Export.image.toDrive({
+        image: lst_std,
+        description:'lst_std',
+        folder: "HYDERABAD",
+        region: region,
+        fileFormat: 'GeoTIFF',
+        scale: 30,
+        maxPixels: 1e13})
+        
+        
+*/
+
+// var chart_A = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: NEW_points,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// })
+// .setSeriesNames([ 'Fishing harbour_2',
+//                   'Kodungaiyur landfill','Corporation Rd STP',
+//                   'Lilly pond','Sriram nagar'])
+//   .setOptions({
+//     title: 'Normalized LST deviation',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai",chart_A)
+
+// var chart_B = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: Chennai_B,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// }).setSeriesNames(['B1', 'B2', 'B3','B4'])
+//   .setOptions({
+//     title: 'Normalized LST deviation "B"',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai_B",chart_B)
+
+// var chart_C = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: Chennai_C,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// }).setSeriesNames(['C1', 'C2', 'C3','C4'])
+//   .setOptions({
+//     title: 'Normalized LST deviation "C"',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai_C",chart_C)
+
+// var chart_D = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: Chennai_D,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// }).setSeriesNames(['D1', 'D2', 'D3','D4'])
+//   .setOptions({
+//     title: 'Normalized LST deviation "D"',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai_D",chart_D)
+
+// var chart_E = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: Chennai_E,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// }).setSeriesNames(['E1', 'E2', 'E3','E4'])
+//   .setOptions({
+//     title: 'Normalized LST deviation "E"',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai_E",chart_E)
+
+// var chart_F = ui.Chart.image.seriesByRegion({
+//     imageCollection: Normalized_deviation,
+//     regions: Chennai_F,
+//     reducer: ee.Reducer.mean(),
+//     scale:30
+// }).setSeriesNames(['F1', 'F2', 'F3','F4'])
+//   .setOptions({
+//     title: 'Normalized LST deviation "F"',
+//     vAxis: {title: 'Normalized deviation', maxValue: 3, minValue: -3},
+//     hAxis: {title: 'date', format: 'YYYY', gridlines: {count: 7}},
+//   });
+// print("chennai_F",chart_F)

@@ -1,0 +1,201 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var india_adm2 = ee.FeatureCollection("users/rharod4/IND_adm2"),
+    india_adm3 = ee.FeatureCollection("users/rharod4/IND_adm3"),
+    geometry = 
+    /* color: #d63000 */
+    /* shown: false */
+    ee.Geometry.Point([78.49792959391078, 17.38470464282785]),
+    aoi = 
+    /* color: #ffffef */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.Geometry.Polygon(
+        [[[78.22684411317843, 17.60388478857342],
+          [78.22684411317843, 17.217325443644242],
+          [78.68415002138156, 17.217325443644242],
+          [78.68415002138156, 17.60388478857342]]], null, false);
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Example
+// Map.addLayer(aoi,{'color':'black'},'aoi')
+// var chennai=india_adm3.filterMetadata("NAME_2",'equals','Chennai')
+// Map.addLayer(chennai,{'color':'red'},'chennai')
+var chennai=india_adm2.filterMetadata("NAME_2",'equals','Hyderabad')
+// Map.addLayer(chennai,{'color':'red'},'Hyderabad')
+// provide geometry in geometry name variable
+var LandsatLST = require('users/rharod4/Time_series:Landsat_LST.js');
+var Year_start=1982,
+    Year_end=2021,
+    Month_start=4,
+    Month_end=5 ;
+    
+Map.centerObject(geometry,6);
+
+var LandsatColl = LandsatLST.collection( Month_start, Month_end ,geometry);
+print(LandsatColl)
+var cmap1 = ['blue', 'cyan', 'green', 'yellow', 'red'];
+var LST_collection=LandsatColl.select(['LST'])
+                    // .map(function(img){
+                    //         return img.clip(chennai)
+                    //         });
+
+
+
+var months = ee.List.sequence(4, 5);
+// print("months",months);
+var years = ee.List.sequence(1984, 2020);
+years=years.remove(2001);
+// print("years",years);
+
+// Map filtering and reducing across year-month combinations and convert to ImageCollection
+var yrMo = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+        return months.map(function (m) {
+            return LST_collection
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .filter(ee.Filter.calendarRange(m, m, 'month'))
+              .sort('CLOUD_COVER').first()
+              // .set('month',m);
+        });
+    }).flatten());
+print("yrMo",yrMo);
+
+
+var yrMo1 = ee.ImageCollection.fromImages(
+  years.map(function (y) {
+            return yrMo
+              .filter(ee.Filter.calendarRange(y, y, 'year'))
+              .sort('CLOUD_COVER').first()
+              // .set('year',y)
+              // .set('month',m);
+    }).flatten());
+print("yrMo1",yrMo1);
+yrMo1=yrMo1.map(function(a){
+                  return a.set('year',ee.Image(a).date().get('year'))
+                          .set('month',ee.Image(a).date().get('month'))
+                })
+print('year:',yrMo1.aggregate_array('year'))
+print('month:',yrMo1.aggregate_array('month'))
+
+var LST_fill=yrMo1.map(function(image){
+                    var filled1a = image.focal_mean(2, 'square', 'pixels', 1)
+                    return filled1a.blend(image);
+});
+
+
+
+// // Define visualization arguments to control the stretch and color gradient
+// // of the data.
+var visArgs = {
+  min: 300.0,
+  max: 330.0,
+  palette: ['blue', 'cyan', 'green', 'yellow', 'red']
+};
+
+// Convert each image to an RGB visualization image by mapping the visualize
+// function over the image collection using the arguments defined previously.
+var tempColVis = LST_fill.map(function(img) {
+  return img.visualize(visArgs);
+});
+// Define an empty image to paint features to.
+var empty = ee.Image().byte();
+
+// Paint country feature edges to the empty image.
+var chennaiOutline = empty
+  .paint({featureCollection: chennai, color: 1, width: 1})
+  // Convert to an RGB visualization image; set line color to black.
+  .visualize({palette: '000000'});
+
+// Map a blend operation over the temperature collection to overlay the country
+// border outline image on all collection images.
+var tempColOutline = tempColVis.map(function(img) {
+  return img.blend(chennaiOutline);
+});
+
+// Define animation arguments.
+var videoArgs = {
+  dimensions: 768,
+  region:LST_fill.geometry(),
+  framesPerSecond: 3,
+  crs: 'EPSG:3857'
+};
+
+// Display the animation.
+// print(ui.Thumbnail(tempColOutline, videoArgs));
+// print(tempColOutline.getVideoThumbURL(videoArgs));
+
+
+// var timeseries = ui.Chart.image.series(yrMo1.select('LST'), geometry, ee.Reducer.mean(), 30);
+//   timeseries.setOptions({
+//     title: 'LST from ',
+//     vAxis: {title: 'LST(K)', maxValue: 340},
+//     hAxis: {title: 'Date', format: 'MM-yy', gridlines: {count: 7}},
+    
+//   });
+//   print(timeseries);
+
+
+
+// Define arguments for the getFilmstripThumbURL function parameters.
+var filmArgs = {
+  dimensions: 768,
+  region: LST_fill.geometry(),
+  crs: 'EPSG:3857',
+  min: 290,
+  max: 330,
+  palette: ['blue', 'purple', 'cyan', 'green', 'yellow', 'red']
+};
+
+// Print a URL that will produce the filmstrip when accessed.
+print(tempColOutline.getFilmstripThumbURL(videoArgs));
+
+var lst_mean=LST_fill.mean();
+Map.addLayer(lst_mean,{min:300, max:330, palette:cmap1}, 'mean');
+
+var lst_std=LST_fill.reduce(ee.Reducer.stdDev());
+Map.addLayer(lst_std,{min:0, max:8, palette:cmap1}, 'st_dev');
+
+
+// Creates a color bar thumbnail image for use in legend from the given color
+// palette.
+function makeColorBarParams(palette) {
+  return {
+    bbox: [0, 0, 1, 0.1],
+    dimensions: '300x10',
+    format: 'png',
+    min: 0,
+    max: 1,
+    palette: palette,
+  };
+}
+
+// Create the color bar for the legend.
+var colorBar = ui.Thumbnail({
+  image: ee.Image.pixelLonLat().select(0),
+  params: makeColorBarParams(visArgs.palette),
+  style: {stretch: 'horizontal', margin: '0px 8px', maxHeight: '24px'},
+});
+
+// Create a panel with three numbers for the legend.
+var legendLabels = ui.Panel({
+  widgets: [
+    ui.Label(300, {margin: '4px 8px'}),
+    ui.Label(
+        (315),
+        {margin: '4px 8px', textAlign: 'center', stretch: 'horizontal'}),
+    ui.Label(330, {margin: '4px 8px'})
+  ],
+  layout: ui.Panel.Layout.flow('horizontal')
+});
+
+var legendTitle = ui.Label({
+  value: '       LST Color bar       ',
+  style: {fontWeight: 'bold'}
+});
+
+// Add the legendPanel to the map.
+var legendPanel = ui.Panel([ colorBar, legendLabels]);
+Map.add(legendPanel);
